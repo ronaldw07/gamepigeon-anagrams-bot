@@ -101,6 +101,18 @@ def display_results(words, letters):
     print(f"\nTotal words found: {len(words)}")
     print(f"Total points: {calculate_max_points(words)}")
 
+def locate_with_retry(image_path, confidence, timeout=8, interval=0.3):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            coords = pyautogui.locateOnScreen(image_path, confidence=confidence)
+            if coords:
+                return coords
+        except pyautogui.ImageNotFoundException:
+            pass
+        time.sleep(interval)
+    return None
+
 def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_button_center_coords):
     for word_click_order in click_order:
         for click in word_click_order:
@@ -112,26 +124,21 @@ def main():
     reader = easyocr.Reader(['en'])
 
     word_list = load_word_list()
-    try:
-        start_button_coords = pyautogui.locateOnScreen(path_to_file('images/start_button.png'), confidence=0.7)
-        if start_button_coords:
-            # Divide by 2 for MacOS Retina display scaling
-            start_button_center_coords = ((start_button_coords[0] + start_button_coords[2] / 2) / 2, (start_button_coords[1] + start_button_coords[3] / 2) / 2)
-    except pyautogui.ImageNotFoundException:
+    start_button_coords = locate_with_retry(path_to_file('images/start_button.png'), confidence=0.7)
+    if not start_button_coords:
         print("No start button detected! Please open the game to the start screen and try again.")
         return
+    # Divide by 2 for MacOS Retina display scaling
+    start_button_center_coords = ((start_button_coords[0] + start_button_coords[2] / 2) / 2, (start_button_coords[1] + start_button_coords[3] / 2) / 2)
 
     pyautogui.click(start_button_center_coords, clicks=2, interval=0.2)
-    time.sleep(1)
 
-    try:
-        enter_button_coords = pyautogui.locateOnScreen(path_to_file('images/enter_button.png'), confidence=0.7)
-        if enter_button_coords:
-            # Divide by 2 for MacOS Retina display scaling
-            enter_button_center_coords = ((enter_button_coords[0] + enter_button_coords[2] / 2) / 2, (enter_button_coords[1] + enter_button_coords[3] / 2) / 2)
-    except pyautogui.ImageNotFoundException:
+    enter_button_coords = locate_with_retry(path_to_file('images/enter_button.png'), confidence=0.7)
+    if not enter_button_coords:
         print("No enter button detected!")
         return
+    # Divide by 2 for MacOS Retina display scaling
+    enter_button_center_coords = ((enter_button_coords[0] + enter_button_coords[2] / 2) / 2, (enter_button_coords[1] + enter_button_coords[3] / 2) / 2)
 
     try:
         empty_letter_boxes_unscaled_coords = pyautogui.locateOnScreen(path_to_file('images/seven_empty_letter_boxes_collection.png'), confidence=0.9)
