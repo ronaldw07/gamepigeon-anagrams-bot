@@ -24,9 +24,12 @@ it doesnt work off the download as screen pixel dimensions r different.
 
 ## Stopping it mid-run
 
-Slam the mouse pointer into any corner of the screen. That trips pyautogui's
-failsafe and aborts immediately, which is easier than reaching the terminal
-while the bot is clicking.
+Press **Esc**. It is watched globally, so it works while the bot has the mouse.
+This needs Terminal added under System Settings → Privacy & Security → Input
+Monitoring; without it the script says so on startup and keeps running.
+
+Failing that, slam the mouse pointer into any corner of the screen to trip
+pyautogui's failsafe.
 
 ## Setup
 

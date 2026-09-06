@@ -1,10 +1,32 @@
 from collections import Counter
+import threading
 import time
 import pyautogui
 import easyocr
 from PIL import Image, ImageFilter
 import numpy as np
 from os import path
+from pynput import keyboard
+
+# The bot owns the mouse while it plays, so the corner failsafe is hard to reach.
+# Esc is watched globally instead.
+stop_requested = threading.Event()
+
+def start_kill_switch():
+    def on_press(key):
+        if key == keyboard.Key.esc:
+            stop_requested.set()
+            print("\nEsc pressed, stopping.")
+            return False
+
+    try:
+        listener = keyboard.Listener(on_press=on_press)
+        listener.daemon = True
+        listener.start()
+        print("Press Esc at any time to stop.")
+    except Exception as error:
+        # Needs Input Monitoring permission; the corner failsafe still applies.
+        print(f"Esc kill switch unavailable ({error}). Slam the mouse into a screen corner to stop.")
 
 def path_to_file(filename):
     return path.abspath(path.join(path.dirname(__file__), filename))
@@ -134,6 +156,8 @@ RETRY_MIN_WORD_LENGTH = 4
 
 def submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords):
     for click in word_click_order:
+        if stop_requested.is_set():
+            return
         pyautogui.click(individual_letter_boxes_coordinates[int(click)])
     pyautogui.click(enter_button_center_coords)
 
@@ -145,22 +169,23 @@ def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_butto
         pyautogui.PAUSE = min(MAX_CLICK_PAUSE, remaining / total_clicks)
 
     for word_click_order in click_order:
-        if time.time() > deadline:
+        if time.time() > deadline or stop_requested.is_set():
             return
         submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
 
     # Leftover time means the first pass finished early. Resubmit the highest
     # scoring words to recover any lost to a dropped click; duplicates are
     # simply rejected by the game.
-    while time.time() < deadline:
+    while time.time() < deadline and not stop_requested.is_set():
         for word_click_order in click_order:
-            if time.time() > deadline:
+            if time.time() > deadline or stop_requested.is_set():
                 return
             if len(word_click_order) < RETRY_MIN_WORD_LENGTH:
                 continue
             submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
 
 def main():
+    start_kill_switch()
     reader = easyocr.Reader(['en'])
 
     word_list = load_word_list()
