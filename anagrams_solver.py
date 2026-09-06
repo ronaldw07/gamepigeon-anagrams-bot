@@ -20,13 +20,25 @@ def ocr(screenshot, reader):
     img_array = np.where(img_array < threshold, 0, 255).astype(np.uint8)
     binarized_letters = Image.fromarray(img_array)
 
-    detections = reader.readtext(np.array(binarized_letters), allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ', detail=0)
+    # detail=1 keeps the bounding boxes so letters can be ordered left to right.
+    # Detection order alone is not positional, and a scrambled order maps every
+    # word onto the wrong tiles.
+    detections = reader.readtext(np.array(binarized_letters), allowlist='ABCDEFGHIJKLMNOPQRSTUVWXYZ', detail=1)
 
-    text_parts = []
-    for detection in detections:
-        text_parts.append(str(detection).strip())
-    text = ''.join(text_parts).upper().replace(' ', '')
-    return text
+    letters = []
+    for box, text, _confidence in detections:
+        text = str(text).strip().upper().replace(' ', '')
+        if not text:
+            continue
+        left_edge = min(corner[0] for corner in box)
+        width = max(corner[0] for corner in box) - left_edge
+        # A single detection can span several tiles, so spread its characters
+        # evenly across its own width to keep them in the right order.
+        for index, character in enumerate(text):
+            letters.append((left_edge + width * (index + 0.5) / len(text), character))
+
+    letters.sort(key=lambda letter: letter[0])
+    return ''.join(character for _x, character in letters)
 
 def can_make_word_from_letters(word, letters):
     word_counter = Counter(word)
