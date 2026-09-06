@@ -118,6 +118,12 @@ def locate_with_retry(image_path, confidence, timeout=8, interval=0.3):
 ROUND_SECONDS = 60
 TIME_SAFETY_MARGIN = 12
 MAX_CLICK_PAUSE = 0.09
+RETRY_MIN_WORD_LENGTH = 4
+
+def submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords):
+    for click in word_click_order:
+        pyautogui.click(individual_letter_boxes_coordinates[int(click)])
+    pyautogui.click(enter_button_center_coords)
 
 def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_button_center_coords, round_start):
     deadline = round_start + ROUND_SECONDS - 2
@@ -128,10 +134,19 @@ def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_butto
 
     for word_click_order in click_order:
         if time.time() > deadline:
-            break
-        for click in word_click_order:
-            pyautogui.click(individual_letter_boxes_coordinates[int(click)])
-        pyautogui.click(enter_button_center_coords)
+            return
+        submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
+
+    # Leftover time means the first pass finished early. Resubmit the highest
+    # scoring words to recover any lost to a dropped click; duplicates are
+    # simply rejected by the game.
+    while time.time() < deadline:
+        for word_click_order in click_order:
+            if time.time() > deadline:
+                return
+            if len(word_click_order) < RETRY_MIN_WORD_LENGTH:
+                continue
+            submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
 
 def main():
     reader = easyocr.Reader(['en'])
