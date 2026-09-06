@@ -11,3 +11,7 @@ Max out GamePigeon Anagrams games using iPhone mirroring!
 
 2. Run the anagrams_solver executable (downloadable from the releases section on the right side of this page). You may need to grant your terminal permissions the first time.
 3. Wait for the program to start! It usually takes around 20-30 seconds to load and start.
+
+
+Notes September 9/6:
+it doesnt work off the download as screen pixel dimensions r different.
