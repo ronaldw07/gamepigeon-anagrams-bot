@@ -22,6 +22,12 @@ Max out GamePigeon Anagrams games using iPhone mirroring!
 Notes September 9/6:
 it doesnt work off the download as screen pixel dimensions r different.
 
+## Stopping it mid-run
+
+Slam the mouse pointer into any corner of the screen. That trips pyautogui's
+failsafe and aborts immediately, which is easier than reaching the terminal
+while the bot is clicking.
+
 ## Setup
 
 ```bash
