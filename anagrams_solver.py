@@ -113,12 +113,25 @@ def locate_with_retry(image_path, confidence, timeout=8, interval=0.3):
         time.sleep(interval)
     return None
 
-def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_button_center_coords):
+# Spend the whole round budget rather than racing, since dropped clicks over
+# iPhone Mirroring cost far more points than unused seconds.
+ROUND_SECONDS = 60
+TIME_SAFETY_MARGIN = 12
+MAX_CLICK_PAUSE = 0.09
+
+def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_button_center_coords, round_start):
+    deadline = round_start + ROUND_SECONDS - 2
+    total_clicks = sum(len(word) + 1 for word in click_order)
+    remaining = deadline - time.time() - TIME_SAFETY_MARGIN
+    if total_clicks and remaining > 0:
+        pyautogui.PAUSE = min(MAX_CLICK_PAUSE, remaining / total_clicks)
+
     for word_click_order in click_order:
+        if time.time() > deadline:
+            break
         for click in word_click_order:
             pyautogui.click(individual_letter_boxes_coordinates[int(click)])
         pyautogui.click(enter_button_center_coords)
-        time.sleep(0.075)
 
 def main():
     reader = easyocr.Reader(['en'])
@@ -132,6 +145,7 @@ def main():
     start_button_center_coords = ((start_button_coords[0] + start_button_coords[2] / 2) / 2, (start_button_coords[1] + start_button_coords[3] / 2) / 2)
 
     pyautogui.click(start_button_center_coords, clicks=2, interval=0.2)
+    round_start = time.time()
 
     enter_button_coords = locate_with_retry(path_to_file('images/enter_button.png'), confidence=0.7)
     if not enter_button_coords:
@@ -143,14 +157,10 @@ def main():
     try:
         empty_letter_boxes_unscaled_coords = pyautogui.locateOnScreen(path_to_file('images/seven_empty_letter_boxes_collection.png'), confidence=0.9)
         number_of_empty_letter_boxes = 7
-        # More aggressive for 7 letters, more words to get through
-        pyautogui.PAUSE = 0.0175
     except pyautogui.ImageNotFoundException:
         try:
             empty_letter_boxes_unscaled_coords = pyautogui.locateOnScreen(path_to_file('images/six_empty_letter_boxes_collection.png'), confidence=0.9)
             number_of_empty_letter_boxes = 6
-            # Less aggressive for 6 letters, less words to get through
-            pyautogui.PAUSE = 0.0275
         except pyautogui.ImageNotFoundException:
             print("No letter boxes detected!")
             return
@@ -184,7 +194,7 @@ def main():
     display_results(possible_words, letters)
 
     click_order = convert_word_list_to_click_order(possible_words, letters)
-    execute_clicks(click_order, individual_letter_boxes_center_coordinates, enter_button_center_coords)
+    execute_clicks(click_order, individual_letter_boxes_center_coordinates, enter_button_center_coords, round_start)
 
 if __name__ == "__main__":
     main()
