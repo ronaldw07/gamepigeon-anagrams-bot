@@ -135,15 +135,29 @@ def display_results(words, letters):
     print(f"\nTotal words found: {len(words)}")
     print(f"Total points: {calculate_max_points(words)}")
 
+# The iPhone Mirroring window can come back a few percent smaller or larger after
+# reconnecting, so templates are also tried slightly scaled.
+TEMPLATE_SCALES = (1.0, 0.97, 1.03, 0.94, 1.06, 0.91, 1.09)
+
+def locate_any_scale(image_path, confidence, screenshot=None):
+    if screenshot is None:
+        screenshot = pyautogui.screenshot()
+    template = Image.open(image_path)
+    for scale in TEMPLATE_SCALES:
+        size = (round(template.width * scale), round(template.height * scale))
+        scaled = template if scale == 1.0 else template.resize(size)
+        try:
+            return pyautogui.locate(scaled, screenshot, confidence=confidence)
+        except pyautogui.ImageNotFoundException:
+            pass
+    return None
+
 def locate_with_retry(image_path, confidence, timeout=8, interval=0.3):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            coords = pyautogui.locateOnScreen(image_path, confidence=confidence)
-            if coords:
-                return coords
-        except pyautogui.ImageNotFoundException:
-            pass
+        coords = locate_any_scale(image_path, confidence)
+        if coords:
+            return coords
         time.sleep(interval)
     return None
 
@@ -206,16 +220,16 @@ def main():
     # Divide by 2 for MacOS Retina display scaling
     enter_button_center_coords = ((enter_button_coords[0] + enter_button_coords[2] / 2) / 2, (enter_button_coords[1] + enter_button_coords[3] / 2) / 2)
 
-    try:
-        empty_letter_boxes_unscaled_coords = pyautogui.locateOnScreen(path_to_file('images/seven_empty_letter_boxes_collection.png'), confidence=0.9)
+    screenshot = pyautogui.screenshot()
+    empty_letter_boxes_unscaled_coords = locate_any_scale(path_to_file('images/seven_empty_letter_boxes_collection.png'), 0.9, screenshot)
+    if empty_letter_boxes_unscaled_coords:
         number_of_empty_letter_boxes = 7
-    except pyautogui.ImageNotFoundException:
-        try:
-            empty_letter_boxes_unscaled_coords = pyautogui.locateOnScreen(path_to_file('images/six_empty_letter_boxes_collection.png'), confidence=0.9)
-            number_of_empty_letter_boxes = 6
-        except pyautogui.ImageNotFoundException:
-            print("No letter boxes detected!")
-            return
+    else:
+        empty_letter_boxes_unscaled_coords = locate_any_scale(path_to_file('images/six_empty_letter_boxes_collection.png'), 0.9, screenshot)
+        number_of_empty_letter_boxes = 6
+    if not empty_letter_boxes_unscaled_coords:
+        print("No letter boxes detected!")
+        return
 
     if empty_letter_boxes_unscaled_coords:
         # 2.5% margin on the left and right to avoid detecting off of the iPhone screen
