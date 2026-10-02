@@ -7,6 +7,26 @@ from PIL import Image, ImageFilter
 import numpy as np
 from os import path
 from pynput import keyboard
+from Quartz import (
+    CGDataProviderCopyData,
+    CGEventCreateMouseEvent,
+    CGEventPost,
+    CGImageGetBytesPerRow,
+    CGImageGetDataProvider,
+    CGImageGetHeight,
+    CGImageGetWidth,
+    CGRectNull,
+    CGWindowListCopyWindowInfo,
+    CGWindowListCreateImage,
+    kCGEventLeftMouseDown,
+    kCGEventLeftMouseUp,
+    kCGHIDEventTap,
+    kCGMouseButtonLeft,
+    kCGNullWindowID,
+    kCGWindowImageBoundsIgnoreFraming,
+    kCGWindowListOptionIncludingWindow,
+    kCGWindowListOptionOnScreenOnly,
+)
 
 # The bot owns the mouse while it plays, so the corner failsafe is hard to reach.
 # Esc is watched globally instead.
@@ -135,13 +155,63 @@ def display_results(words, letters):
     print(f"\nTotal words found: {len(words)}")
     print(f"Total points: {calculate_max_points(words)}")
 
+# The templates in images/ were captured on a Retina screen, so every capture
+# is brought to this many pixels per point before matching.
+TEMPLATE_PIXELS_PER_POINT = 2
+
+def find_mirroring_window():
+    """(window id, (x, y, w, h)) of the iPhone Mirroring window in screen
+    points, on whichever display it is, or None."""
+    windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
+    matches = [
+        w for w in windows
+        if w.get("kCGWindowOwnerName") == "iPhone Mirroring"
+        and w.get("kCGWindowName") == "iPhone Mirroring"
+    ]
+    if not matches:
+        return None
+    w = max(matches, key=lambda w: w["kCGWindowBounds"]["Width"] * w["kCGWindowBounds"]["Height"])
+    b = w["kCGWindowBounds"]
+    return w["kCGWindowNumber"], (int(b["X"]), int(b["Y"]), int(b["Width"]), int(b["Height"]))
+
+def capture_window():
+    """Screenshot of just the iPhone Mirroring window, scaled to the templates'
+    Retina resolution, and the window's top-left corner in screen points.
+    A full-screen grab only covers the main display and misses the window
+    on an external monitor. Returns (None, None) if the window isn't open."""
+    found = find_mirroring_window()
+    if found is None:
+        return None, None
+    window_id, (x, y, w, h) = found
+    image = CGWindowListCreateImage(
+        CGRectNull, kCGWindowListOptionIncludingWindow, window_id, kCGWindowImageBoundsIgnoreFraming,
+    )
+    width, height = CGImageGetWidth(image), CGImageGetHeight(image)
+    data = CGDataProviderCopyData(CGImageGetDataProvider(image))
+    bgra = np.frombuffer(data, dtype=np.uint8).reshape(height, CGImageGetBytesPerRow(image) // 4, 4)
+    screenshot = Image.fromarray(np.ascontiguousarray(bgra[:, :width, 2::-1]))
+    target = (w * TEMPLATE_PIXELS_PER_POINT, h * TEMPLATE_PIXELS_PER_POINT)
+    if screenshot.size != target:
+        screenshot = screenshot.resize(target)
+    return screenshot, (x, y)
+
+def to_screen_point(x, y, window_origin):
+    """Convert a position in a capture_window() screenshot to screen points."""
+    return (window_origin[0] + x / TEMPLATE_PIXELS_PER_POINT,
+            window_origin[1] + y / TEMPLATE_PIXELS_PER_POINT)
+
+def click(point, pause=0.0):
+    """Click with Quartz events, which reach displays left of or above the
+    main one (negative coordinates)."""
+    for kind in (kCGEventLeftMouseDown, kCGEventLeftMouseUp):
+        CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kind, point, kCGMouseButtonLeft))
+    time.sleep(pause)
+
 # The iPhone Mirroring window can come back a few percent smaller or larger after
 # reconnecting, so templates are also tried slightly scaled.
 TEMPLATE_SCALES = (1.0, 0.97, 1.03, 0.94, 1.06, 0.91, 1.09)
 
-def locate_any_scale(image_path, confidence, screenshot=None):
-    if screenshot is None:
-        screenshot = pyautogui.screenshot()
+def locate_any_scale(image_path, confidence, screenshot):
     template = Image.open(image_path)
     for scale in TEMPLATE_SCALES:
         size = (round(template.width * scale), round(template.height * scale))
@@ -153,13 +223,15 @@ def locate_any_scale(image_path, confidence, screenshot=None):
     return None
 
 def locate_with_retry(image_path, confidence, timeout=8, interval=0.3):
+    """Returns (box in the capture, window origin), or (None, None)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        coords = locate_any_scale(image_path, confidence)
+        screenshot, window_origin = capture_window()
+        coords = locate_any_scale(image_path, confidence, screenshot) if screenshot else None
         if coords:
-            return coords
+            return coords, window_origin
         time.sleep(interval)
-    return None
+    return None, None
 
 # Spend the whole round budget rather than racing, since dropped clicks over
 # iPhone Mirroring cost far more points than unused seconds.
@@ -168,24 +240,25 @@ TIME_SAFETY_MARGIN = 12
 MAX_CLICK_PAUSE = 0.09
 RETRY_MIN_WORD_LENGTH = 4
 
-def submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords):
-    for click in word_click_order:
+def submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords, pause):
+    for letter_index in word_click_order:
         if stop_requested.is_set():
             return
-        pyautogui.click(individual_letter_boxes_coordinates[int(click)])
-    pyautogui.click(enter_button_center_coords)
+        click(individual_letter_boxes_coordinates[int(letter_index)], pause)
+    click(enter_button_center_coords, pause)
 
 def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_button_center_coords, round_start):
     deadline = round_start + ROUND_SECONDS - 2
     total_clicks = sum(len(word) + 1 for word in click_order)
     remaining = deadline - time.time() - TIME_SAFETY_MARGIN
+    pause = MAX_CLICK_PAUSE
     if total_clicks and remaining > 0:
-        pyautogui.PAUSE = min(MAX_CLICK_PAUSE, remaining / total_clicks)
+        pause = min(MAX_CLICK_PAUSE, remaining / total_clicks)
 
     for word_click_order in click_order:
         if time.time() > deadline or stop_requested.is_set():
             return
-        submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
+        submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords, pause)
 
     # Leftover time means the first pass finished early. Resubmit the highest
     # scoring words to recover any lost to a dropped click; duplicates are
@@ -196,31 +269,31 @@ def execute_clicks(click_order, individual_letter_boxes_coordinates, enter_butto
                 return
             if len(word_click_order) < RETRY_MIN_WORD_LENGTH:
                 continue
-            submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords)
+            submit_word(word_click_order, individual_letter_boxes_coordinates, enter_button_center_coords, pause)
 
 def main():
     start_kill_switch()
     reader = easyocr.Reader(['en'])
 
     word_list = load_word_list()
-    start_button_coords = locate_with_retry(path_to_file('images/start_button.png'), confidence=0.7)
+    start_button_coords, window_origin = locate_with_retry(path_to_file('images/start_button.png'), confidence=0.7)
     if not start_button_coords:
         print("No start button detected! Please open the game to the start screen and try again.")
         return
-    # Divide by 2 for MacOS Retina display scaling
-    start_button_center_coords = ((start_button_coords[0] + start_button_coords[2] / 2) / 2, (start_button_coords[1] + start_button_coords[3] / 2) / 2)
+    start_button_center_coords = to_screen_point(start_button_coords[0] + start_button_coords[2] / 2, start_button_coords[1] + start_button_coords[3] / 2, window_origin)
 
-    pyautogui.click(start_button_center_coords, clicks=2, interval=0.2)
+    # The first click focuses the iPhone Mirroring window, the second presses Start.
+    click(start_button_center_coords, pause=0.2)
+    click(start_button_center_coords)
     round_start = time.time()
 
-    enter_button_coords = locate_with_retry(path_to_file('images/enter_button.png'), confidence=0.7)
+    enter_button_coords, window_origin = locate_with_retry(path_to_file('images/enter_button.png'), confidence=0.7)
     if not enter_button_coords:
         print("No enter button detected!")
         return
-    # Divide by 2 for MacOS Retina display scaling
-    enter_button_center_coords = ((enter_button_coords[0] + enter_button_coords[2] / 2) / 2, (enter_button_coords[1] + enter_button_coords[3] / 2) / 2)
+    enter_button_center_coords = to_screen_point(enter_button_coords[0] + enter_button_coords[2] / 2, enter_button_coords[1] + enter_button_coords[3] / 2, window_origin)
 
-    screenshot = pyautogui.screenshot()
+    screenshot, window_origin = capture_window()
     empty_letter_boxes_unscaled_coords = locate_any_scale(path_to_file('images/seven_empty_letter_boxes_collection.png'), 0.9, screenshot)
     if empty_letter_boxes_unscaled_coords:
         number_of_empty_letter_boxes = 7
@@ -231,24 +304,16 @@ def main():
         print("No letter boxes detected!")
         return
 
-    if empty_letter_boxes_unscaled_coords:
-        # 2.5% margin on the left and right to avoid detecting off of the iPhone screen
-        # Divide by 2 for MacOS Retina display scaling
-        screenshot_coordinates = (
-            int((empty_letter_boxes_unscaled_coords[0] + empty_letter_boxes_unscaled_coords[2] / 40) / 2),
-            int((empty_letter_boxes_unscaled_coords[1] + empty_letter_boxes_unscaled_coords[3]) / 2),
-            int((empty_letter_boxes_unscaled_coords[2] - empty_letter_boxes_unscaled_coords[2] / 20) / 2),
-            int(empty_letter_boxes_unscaled_coords[3] / 2)
-        )
-        # Divide by 2 for MacOS Retina display scaling
-        individual_letter_boxes_center_coordinates = []
-        for i in range(number_of_empty_letter_boxes):
-            individual_letter_boxes_center_coordinates.append((
-                int((empty_letter_boxes_unscaled_coords[0] + empty_letter_boxes_unscaled_coords[2] / number_of_empty_letter_boxes * i + empty_letter_boxes_unscaled_coords[2] / (number_of_empty_letter_boxes * 2)) / 2),
-                int((empty_letter_boxes_unscaled_coords[1] + empty_letter_boxes_unscaled_coords[3] * 1.5) / 2)
-            ))
+    left, top, width, height = empty_letter_boxes_unscaled_coords
+    # The letter tiles sit one box-height below the empty boxes. 2.5% margin on
+    # the left and right to avoid detecting off of the iPhone screen.
+    letters_region = (int(left + width / 40), int(top + height), int(left + width - width / 40), int(top + 2 * height))
+    individual_letter_boxes_center_coordinates = [
+        to_screen_point(left + width / number_of_empty_letter_boxes * i + width / (number_of_empty_letter_boxes * 2), top + height * 1.5, window_origin)
+        for i in range(number_of_empty_letter_boxes)
+    ]
 
-    letters_screenshot = pyautogui.screenshot(region=screenshot_coordinates)
+    letters_screenshot = capture_window()[0].crop(letters_region)
     letters = ocr(letters_screenshot, reader)
 
     print(f"Detected letters: {letters}")
